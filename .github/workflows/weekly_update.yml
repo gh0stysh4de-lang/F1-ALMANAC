@@ -1,0 +1,22 @@
+name: Weekly F1 Data Update
+
+on:
+  schedule:
+    # Every Monday at 05:00 UTC (08:00 Kyiv time)
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r etl/requirements.txt
+      - name: Run weekly update
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: python etl/update_season.py
