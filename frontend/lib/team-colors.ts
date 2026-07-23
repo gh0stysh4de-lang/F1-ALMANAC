@@ -39,7 +39,7 @@ export const TEAM_COLOR_ERAS: Record<string, ColorEra[]> = {
   "brp": [{ from: 1963, to: 1964, hex: "#006B3F" }],
   "bugatti": [{ from: 1956, to: 1956, hex: "#0055A4" }],
   "butterworth": [{ from: 1952, to: 1952, hex: "#CA4DB6" }],
-  "cadillac": [{ from: 2026, to: 2026, hex: "#FFD700" }],
+  "cadillac": [{ from: 2026, to: 2026, hex: "#9FA0A3" }],
   "caterham": [{ from: 2012, to: 2014, hex: "#35BA16" }],
   "cisitalia": [{ from: 1952, to: 1952, hex: "#4DCA64" }],
   "coloni": [{ from: 1987, to: 1990, hex: "#BBCA4D" }, { from: 1991, to: 1991, hex: "#7FCA4D" }],

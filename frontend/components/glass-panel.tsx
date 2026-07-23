@@ -58,7 +58,17 @@ export function GlassPanel({
         }}
       />
 
-      {action && <div className="absolute right-3 top-3 z-10">{action}</div>}
+      {action && (
+  <div
+    className={
+      title
+        ? "absolute right-4 top-4 z-[100]"
+        : "absolute right-3 top-3 z-[100]"
+    }
+  >
+    {action}
+  </div>
+)}
 
       {title && (
         <h2

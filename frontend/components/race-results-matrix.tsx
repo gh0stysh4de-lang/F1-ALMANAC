@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useState, type MouseEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { createPortal } from "react-dom";
 
 // A cell is a finishing position (number), a DNF, or null (did not enter that round).
@@ -39,18 +46,20 @@ type CellDetail = {
 };
 
 type ConDetail = {
-  drivers: { code: string; position: number | "DNF" | null; points: number | null }[];
+  drivers: {
+    code: string;
+    position: number | "DNF" | null;
+    points: number | null;
+  }[];
 };
 
 type ApiResponse = {
   mode?: "drivers" | "constructors";
   calendar: CalendarGp[];
   drivers: DriverRow[];
-  // drivers-mode: CellDetail per code; constructors-mode: ConDetail per team key
   details: Record<string, Record<number, CellDetail | ConDetail>>;
 };
 
-// Type guard: is this a constructor cell (two halves)?
 function isConCell(c: ResultCell | ConCell): c is ConCell {
   return c !== null && typeof c === "object";
 }
@@ -60,6 +69,12 @@ type HoverState = {
   ri: number;
   x: number;
   y: number;
+};
+
+type ScrollbarState = {
+  hasOverflow: boolean;
+  thumbHeight: number;
+  thumbTop: number;
 };
 
 const LABEL = "rgba(255,255,255,0.4)";
@@ -72,7 +87,9 @@ function cellBg(p: ResultCell): string {
   if (p === 2) return "rgba(156, 164, 184, 0.40)";
   if (p === 3) return "rgba(154, 100, 65, 0.42)";
 
-  if (p <= 10) return `rgba(130, 134, 168, ${0.28 - (p - 4) * 0.025})`;
+  if (p <= 10) {
+    return `rgba(130, 134, 168, ${0.28 - (p - 4) * 0.025})`;
+  }
 
   return "rgba(100, 100, 130, 0.12)";
 }
@@ -101,8 +118,21 @@ export function RaceResultsMatrix({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  const dragRef = useRef<{
+    startY: number;
+    startScrollTop: number;
+  } | null>(null);
+
   const [hover, setHover] = useState<HoverState | null>(null);
   const [tooltipRoot, setTooltipRoot] = useState<HTMLElement | null>(null);
+
+  const [scrollbar, setScrollbar] = useState<ScrollbarState>({
+    hasOverflow: false,
+    thumbHeight: 0,
+    thumbTop: 0,
+  });
 
   useEffect(() => {
     setTooltipRoot(document.body);
@@ -110,11 +140,14 @@ export function RaceResultsMatrix({
 
   useEffect(() => {
     const ctrl = new AbortController();
+
     setLoading(true);
     setError(null);
     setHover(null);
 
-    fetch(`/api/results?season=${season}&mode=${mode}`, { signal: ctrl.signal })
+    fetch(`/api/results?season=${season}&mode=${mode}`, {
+      signal: ctrl.signal,
+    })
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return (await res.json()) as ApiResponse;
@@ -125,6 +158,7 @@ export function RaceResultsMatrix({
       })
       .catch((err) => {
         if (err.name === "AbortError") return;
+
         console.error("[RaceResultsMatrix] fetch failed:", err);
         setError("Could not load results.");
         setLoading(false);
@@ -132,6 +166,108 @@ export function RaceResultsMatrix({
 
     return () => ctrl.abort();
   }, [season, mode]);
+
+  const updateScrollbar = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+
+    const clientHeight = el.clientHeight;
+    const scrollHeight = el.scrollHeight;
+    const maxScrollTop = scrollHeight - clientHeight;
+
+    if (maxScrollTop <= 1) {
+      setScrollbar({
+        hasOverflow: false,
+        thumbHeight: 0,
+        thumbTop: 0,
+      });
+
+      return;
+    }
+
+    const thumbHeight = Math.max(
+      28,
+      Math.round((clientHeight / scrollHeight) * clientHeight)
+    );
+
+    const maxThumbTravel = clientHeight - thumbHeight;
+
+    const thumbTop =
+      maxThumbTravel > 0
+        ? (el.scrollTop / maxScrollTop) * maxThumbTravel
+        : 0;
+
+    setScrollbar({
+      hasOverflow: true,
+      thumbHeight,
+      thumbTop,
+    });
+  }, []);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+
+    const frame = requestAnimationFrame(updateScrollbar);
+
+    const observer = new ResizeObserver(updateScrollbar);
+    observer.observe(el);
+
+    window.addEventListener("resize", updateScrollbar);
+
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener("resize", updateScrollbar);
+    };
+  }, [data, updateScrollbar]);
+
+  function handleThumbPointerDown(
+    e: ReactPointerEvent<HTMLButtonElement>
+  ) {
+    const el = scrollRef.current;
+    if (!el) return;
+
+    e.preventDefault();
+
+    dragRef.current = {
+      startY: e.clientY,
+      startScrollTop: el.scrollTop,
+    };
+
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+
+  function handleThumbPointerMove(
+    e: ReactPointerEvent<HTMLButtonElement>
+  ) {
+    const el = scrollRef.current;
+    const drag = dragRef.current;
+
+    if (!el || !drag || !scrollbar.hasOverflow) return;
+
+    const maxScrollTop = el.scrollHeight - el.clientHeight;
+    const maxThumbTravel = el.clientHeight - scrollbar.thumbHeight;
+
+    if (maxScrollTop <= 0 || maxThumbTravel <= 0) return;
+
+    const deltaY = e.clientY - drag.startY;
+
+    const nextScrollTop =
+      drag.startScrollTop + deltaY * (maxScrollTop / maxThumbTravel);
+
+    el.scrollTop = Math.max(0, Math.min(maxScrollTop, nextScrollTop));
+  }
+
+  function handleThumbPointerUp(
+    e: ReactPointerEvent<HTMLButtonElement>
+  ) {
+    dragRef.current = null;
+
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  }
 
   function handleCellHover(
     e: MouseEvent<HTMLDivElement>,
@@ -149,9 +285,15 @@ export function RaceResultsMatrix({
     if (x + tooltipWidth > window.innerWidth - padding) {
       x = window.innerWidth - tooltipWidth - padding;
     }
+
     if (y < padding) y = padding;
 
-    setHover({ di, ri, x: Math.max(padding, x), y: Math.max(padding, y) });
+    setHover({
+      di,
+      ri,
+      x: Math.max(padding, x),
+      y: Math.max(padding, y),
+    });
   }
 
   if (loading) {
@@ -177,29 +319,50 @@ export function RaceResultsMatrix({
   const { calendar, drivers, details } = data;
   const isConstructors = data.mode === "constructors";
 
-  // Resolve hovered cell detail from the loaded data (no extra request).
   const hoveredGp = hover ? calendar[hover.ri] : null;
   const hoveredDriver = hover ? drivers[hover.di] : null;
 
-  // drivers-mode: look up by code; constructors-mode: look up by team key.
   const detail: CellDetail | null =
     !isConstructors && hover && hoveredGp && hoveredDriver
-      ? ((details[hoveredDriver.code]?.[hoveredGp.round] as CellDetail) ?? null)
+      ? ((details[hoveredDriver.code]?.[hoveredGp.round] as CellDetail) ??
+        null)
       : null;
 
   const conDetail: ConDetail | null =
-    isConstructors && hover && hoveredGp && hoveredDriver && hoveredDriver.team
-      ? ((details[hoveredDriver.team]?.[hoveredGp.round] as ConDetail) ?? null)
+    isConstructors &&
+    hover &&
+    hoveredGp &&
+    hoveredDriver &&
+    hoveredDriver.team
+      ? ((details[hoveredDriver.team]?.[
+          hoveredGp.round
+        ] as ConDetail) ?? null)
       : null;
 
   return (
     <div className="relative flex h-full flex-col">
+      <style jsx global>{`
+        .matrix-native-scroll {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+        }
+
+        .matrix-native-scroll::-webkit-scrollbar {
+          display: none;
+          width: 0;
+          height: 0;
+        }
+      `}</style>
+
       {/* Header: GP flags + codes */}
       <div className="-mt-1 flex">
         <div className="w-[32px] flex-shrink-0" />
 
         {calendar.map((gp, index) => (
-          <div key={`${gp.code}-${index}`} className="flex-1 pb-1.5 text-center">
+          <div
+            key={`${gp.code}-${index}`}
+            className="flex-1 pb-1.5 text-center"
+          >
             <div className="flex h-[10px] items-center justify-center">
               {gp.countryCode ? (
                 <img
@@ -226,89 +389,137 @@ export function RaceResultsMatrix({
       </div>
 
       {/* Rows */}
-      <div className="flex flex-1 flex-col">
-        {drivers.map((d, di) => (
-          <div key={`${d.code}-${di}`} className="flex min-h-0 flex-1 items-stretch">
-            <div className="flex w-[32px] flex-shrink-0 items-center">
-              <span
-                className="mr-1 inline-block h-2.5 w-0.5 rounded-[1px]"
-                style={{ background: d.color || "transparent" }}
-              />
-              <span className="text-[9px] font-semibold" style={{ color: "#c7c5d0" }}>
-                {d.code}
-              </span>
-            </div>
+      <div className="group/matrix relative -mr-[14px] min-h-0 flex-1">
+        <div
+          ref={scrollRef}
+          className="matrix-native-scroll absolute inset-y-0 left-0 right-[14px] flex min-h-0 flex-col overflow-y-auto"
+          onScroll={updateScrollbar}
+        >
+          {drivers.map((d, di) => (
+            <div
+              key={`${d.code}-${di}`}
+              className="flex flex-1 items-stretch"
+              style={{ minHeight: 12 }}
+            >
+              <div className="flex w-[32px] flex-shrink-0 items-center">
+                <span
+                  className="mr-1 inline-block h-2.5 w-0.5 rounded-[1px]"
+                  style={{ background: d.color || "transparent" }}
+                />
 
-            {d.results.map((cell, i) => {
-              // Constructor cell: two halves (best | second). Driver cell: single value.
-              if (isConCell(cell)) {
-                const hasSecond = cell.second !== null;
+                <span
+                  className="text-[9px] font-semibold"
+                  style={{ color: "#c7c5d0" }}
+                >
+                  {d.code}
+                </span>
+              </div>
+
+              {d.results.map((cell, i) => {
+                if (isConCell(cell)) {
+                  const hasSecond = cell.second !== null;
+
+                  return (
+                    <div
+                      key={i}
+                      className="flex-1 cursor-default p-[1px]"
+                      onMouseEnter={(e) =>
+                        cell.best !== null && handleCellHover(e, di, i)
+                      }
+                      onMouseMove={(e) =>
+                        cell.best !== null && handleCellHover(e, di, i)
+                      }
+                      onMouseLeave={() => setHover(null)}
+                    >
+                      <div className="flex h-full w-full gap-[1px] transition-transform hover:scale-110">
+                        <div
+                          className="flex flex-1 items-center justify-center rounded-l-[3px] font-semibold leading-none tabular-nums"
+                          style={{
+                            minHeight: 10,
+                            background: cellBg(cell.best),
+                            color: cellText(cell.best),
+                            fontSize: 8,
+                            borderRadius: hasSecond ? "5px 0 0 5px" : 5,
+                          }}
+                        >
+                          {cell.best === "DNF"
+                            ? "R"
+                            : cell.best === null
+                              ? ""
+                              : cell.best}
+                        </div>
+
+                        {hasSecond && (
+                          <div
+                            className="flex flex-1 items-center justify-center font-semibold leading-none tabular-nums"
+                            style={{
+                              minHeight: 10,
+                              background: cellBg(cell.second),
+                              color: cellText(cell.second),
+                              fontSize: 8,
+                              borderRadius: "0 5px 5px 0",
+                            }}
+                          >
+                            {cell.second === "DNF" ? "R" : cell.second}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                }
+
+                const pos = cell;
+
                 return (
                   <div
                     key={i}
                     className="flex-1 cursor-default p-[1px]"
-                    onMouseEnter={(e) => cell.best !== null && handleCellHover(e, di, i)}
-                    onMouseMove={(e) => cell.best !== null && handleCellHover(e, di, i)}
+                    onMouseEnter={(e) =>
+                      pos !== null && handleCellHover(e, di, i)
+                    }
+                    onMouseMove={(e) =>
+                      pos !== null && handleCellHover(e, di, i)
+                    }
                     onMouseLeave={() => setHover(null)}
                   >
-                    <div className="flex h-full w-full gap-[1px]">
-                      <div
-                        className="flex flex-1 items-center justify-center rounded-l-[3px] font-semibold leading-none tabular-nums"
-                        style={{
-                          minHeight: 10,
-                          background: cellBg(cell.best),
-                          color: cellText(cell.best),
-                          fontSize: 8,
-                          borderRadius: hasSecond ? "5px 0 0 5px" : 5,
-                        }}
-                      >
-                        {cell.best === "DNF" ? "R" : cell.best === null ? "" : cell.best}
-                      </div>
-                      {hasSecond && (
-                        <div
-                          className="flex flex-1 items-center justify-center font-semibold leading-none tabular-nums"
-                          style={{
-                            minHeight: 10,
-                            background: cellBg(cell.second),
-                            color: cellText(cell.second),
-                            fontSize: 8,
-                            borderRadius: "0 5px 5px 0",
-                          }}
-                        >
-                          {cell.second === "DNF" ? "R" : cell.second}
-                        </div>
-                      )}
+                    <div
+                      className="flex h-full w-full items-center justify-center rounded-[5px] font-semibold leading-none tabular-nums transition-transform hover:scale-110"
+                      style={{
+                        minHeight: 10,
+                        background: cellBg(pos),
+                        color: cellText(pos),
+                        fontSize: 8.5,
+                      }}
+                    >
+                      {pos === "DNF" ? "R" : pos === null ? "" : pos}
                     </div>
                   </div>
                 );
-              }
+              })}
+            </div>
+          ))}
+        </div>
 
-              // Driver cell (single value)
-              const pos = cell;
-              return (
-                <div
-                  key={i}
-                  className="flex-1 cursor-default p-[1px]"
-                  onMouseEnter={(e) => pos !== null && handleCellHover(e, di, i)}
-                  onMouseMove={(e) => pos !== null && handleCellHover(e, di, i)}
-                  onMouseLeave={() => setHover(null)}
-                >
-                  <div
-                    className="flex h-full w-full items-center justify-center rounded-[5px] font-semibold leading-none tabular-nums transition-transform hover:scale-110"
-                    style={{
-                      minHeight: 10,
-                      background: cellBg(pos),
-                      color: cellText(pos),
-                      fontSize: 8.5,
-                    }}
-                  >
-                    {pos === "DNF" ? "R" : pos === null ? "" : pos}
-                  </div>
-                </div>
-              );
-            })}
+        {scrollbar.hasOverflow && (
+          <div className="pointer-events-none absolute bottom-0 right-[3px] top-0 w-[7px] opacity-0 transition-opacity duration-150 group-hover/matrix:opacity-100">
+            <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 rounded-full bg-white/[0.04]" />
+
+            <button
+              type="button"
+              aria-label="Scroll race results"
+              className="pointer-events-auto absolute left-0 w-full cursor-grab rounded-full bg-white/[0.28] transition-colors hover:bg-white/[0.48] active:cursor-grabbing"
+              style={{
+                top: scrollbar.thumbTop,
+                height: scrollbar.thumbHeight,
+                touchAction: "none",
+              }}
+              onPointerDown={handleThumbPointerDown}
+              onPointerMove={handleThumbPointerMove}
+              onPointerUp={handleThumbPointerUp}
+              onPointerCancel={handleThumbPointerUp}
+            />
           </div>
-        ))}
+        )}
       </div>
 
       {detail &&
@@ -332,8 +543,10 @@ export function RaceResultsMatrix({
                 <div className="text-[13px] font-semibold text-white">
                   {hoveredGp.name}
                 </div>
+
                 <div className="text-[10px] text-white/50">
-                  {hoveredGp.country} · Round {hoveredGp.round} · {hoveredDriver.code}
+                  {hoveredGp.country} · Round {hoveredGp.round} ·{" "}
+                  {hoveredDriver.code}
                 </div>
               </div>
 
@@ -350,6 +563,7 @@ export function RaceResultsMatrix({
             <div className="flex flex-col gap-1.5">
               {(() => {
                 const finish = detail.finished ? detail.position : "DNF";
+
                 const gain =
                   detail.finished &&
                   detail.position !== null &&
@@ -357,12 +571,15 @@ export function RaceResultsMatrix({
                   detail.grid > 0
                     ? detail.grid - detail.position
                     : null;
+
                 return (
                   <>
                     <div className="flex items-center justify-between">
                       <span className="text-white/50">Grid</span>
                       <span className="font-semibold tabular-nums text-white">
-                        {detail.grid === 0 || detail.grid === null ? "PIT" : detail.grid}
+                        {detail.grid === 0 || detail.grid === null
+                          ? "PIT"
+                          : detail.grid}
                       </span>
                     </div>
 
@@ -376,6 +593,7 @@ export function RaceResultsMatrix({
                     {gain !== null && (
                       <div className="flex items-center justify-between">
                         <span className="text-white/50">Positions</span>
+
                         <span
                           className="font-semibold tabular-nums"
                           style={{
@@ -418,6 +636,7 @@ export function RaceResultsMatrix({
 
                     <div className="flex items-center justify-between">
                       <span className="text-white/50">Fastest lap</span>
+
                       <span className="flex items-center gap-1 font-semibold tabular-nums text-white">
                         {detail.isFastestLap && (
                           <span
@@ -426,13 +645,16 @@ export function RaceResultsMatrix({
                             title="Fastest lap of the race"
                           />
                         )}
+
                         {detail.fastestLapTime ?? "—"}
                       </span>
                     </div>
 
                     <div className="flex items-center justify-between">
                       <span className="text-white/50">Status</span>
-                      <span className="font-semibold text-white">{detail.status}</span>
+                      <span className="font-semibold text-white">
+                        {detail.status}
+                      </span>
                     </div>
                   </>
                 );
@@ -463,14 +685,18 @@ export function RaceResultsMatrix({
                 <div className="text-[13px] font-semibold text-white">
                   {hoveredGp.name}
                 </div>
+
                 <div className="flex items-center gap-1.5 text-[10px] text-white/50">
                   <span
                     className="inline-block h-2 w-0.5 rounded-[1px]"
-                    style={{ background: hoveredDriver.color || "transparent" }}
+                    style={{
+                      background: hoveredDriver.color || "transparent",
+                    }}
                   />
                   {hoveredDriver.code} · Round {hoveredGp.round}
                 </div>
               </div>
+
               {hoveredGp.countryCode && (
                 <img
                   src={`https://flagcdn.com/w80/${hoveredGp.countryCode}.png`}
@@ -483,14 +709,25 @@ export function RaceResultsMatrix({
 
             <div className="flex flex-col gap-1.5">
               {conDetail.drivers.map((dr, idx) => (
-                <div key={`${dr.code}-${idx}`} className="flex items-center justify-between gap-3">
+                <div
+                  key={`${dr.code}-${idx}`}
+                  className="flex items-center justify-between gap-3"
+                >
                   <span className="text-white/80">{dr.code}</span>
+
                   <div className="flex items-center gap-3">
                     <span className="tabular-nums text-white/60">
-                      {dr.position === "DNF" ? "DNF" : dr.position === null ? "—" : `P${dr.position}`}
+                      {dr.position === "DNF"
+                        ? "DNF"
+                        : dr.position === null
+                          ? "—"
+                          : `P${dr.position}`}
                     </span>
+
                     <span className="w-7 text-right font-semibold tabular-nums text-white">
-                      {dr.points !== null && dr.points > 0 ? dr.points : "—"}
+                      {dr.points !== null && dr.points > 0
+                        ? dr.points
+                        : "—"}
                     </span>
                   </div>
                 </div>
@@ -498,8 +735,12 @@ export function RaceResultsMatrix({
 
               <div className="mt-1 flex items-center justify-between border-t border-white/10 pt-1.5">
                 <span className="text-white/50">Team points</span>
+
                 <span className="font-semibold tabular-nums text-white">
-                  {conDetail.drivers.reduce((s, dr) => s + (dr.points ?? 0), 0)}
+                  {conDetail.drivers.reduce(
+                    (sum, dr) => sum + (dr.points ?? 0),
+                    0
+                  )}
                 </span>
               </div>
             </div>
