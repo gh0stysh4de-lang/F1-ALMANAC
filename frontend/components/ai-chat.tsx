@@ -16,7 +16,7 @@ type GeneratedSql = { sql: string; ok: boolean; bytesProcessed?: number };
 type ChatMessage = {
   id: string;
   role: Role;
-  content: string;АМ
+  content: string;
   generatedSql?: GeneratedSql[];
   error?: boolean;
 };
