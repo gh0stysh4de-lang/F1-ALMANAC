@@ -12,7 +12,7 @@ const exo2 = Exo_2({
 
 export const metadata: Metadata = {
   title: "F1 Almanac",
-  description: "Formula 1 Encyclopedia — 1950–2026",
+  description: "Formula 1 Almanac — 1950–2026",
 };
 
 export default function RootLayout({
