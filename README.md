@@ -123,4 +123,3 @@ frontend/
 ├── components/           # Reusable UI and visualization components
 ├── lib/                  # Data access, utilities, and shared logic
 └── public/               # Images, circuit SVGs, and static assets
-```text
