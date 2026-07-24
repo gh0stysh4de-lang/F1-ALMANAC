@@ -121,7 +121,7 @@ export function SeasonPicker({
           className="mt-1.5 text-[14px]"
           style={{ color: "rgba(199, 197, 208, 0.30)" }}
         >
-          Use the dropdown above, or pick a year below.
+          Choose a year below to explore the data.
         </p>
       </div>
 
