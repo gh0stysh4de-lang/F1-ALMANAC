@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Sparkles, X, Send, Loader2, ChevronDown, ChevronUp, Info } from "lucide-react";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 // Floating AI Data Chat. Talks to /api/ask (Claude + BigQuery tools + guarded
 // text-to-SQL fallback — see lib/ai/tools.ts and lib/ai/schema_semantic.md).
@@ -24,6 +26,95 @@ type ChatMessage = {
 const PANEL_TITLE = "rgba(199, 197, 208, 0.85)";
 const BODY_TEXT = "rgba(232, 230, 240, 0.88)";
 const MUTED_TEXT = "rgba(255, 255, 255, 0.45)";
+const PURPLE_ACCENT = "rgba(160, 120, 240, 0.9)";
+
+// Renders assistant/user message content as GFM markdown (tables, bold,
+// lists, inline code) instead of raw whitespace-pre-wrap text. This is
+// specifically what makes SQL-result tables from the assistant render as an
+// actual <table> with real columns, instead of "|" characters that never
+// lined up anyway — Exo 2 is proportional, not monospace, so column
+// alignment via spaces/pipes in plain text was never going to look right
+// regardless of panel width.
+function MessageContent({ content }: { content: string }) {
+  return (
+    <Markdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+        strong: ({ children }) => (
+          <strong className="font-semibold" style={{ color: BODY_TEXT }}>
+            {children}
+          </strong>
+        ),
+        em: ({ children }) => <em className="italic">{children}</em>,
+        a: ({ href, children }) => (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2"
+            style={{ color: PURPLE_ACCENT }}
+          >
+            {children}
+          </a>
+        ),
+        ul: ({ children }) => (
+          <ul className="my-1.5 list-disc space-y-0.5 pl-4">{children}</ul>
+        ),
+        ol: ({ children }) => (
+          <ol className="my-1.5 list-decimal space-y-0.5 pl-4">{children}</ol>
+        ),
+        li: ({ children }) => <li>{children}</li>,
+        code: ({ children }) => (
+          <code
+            className="rounded-[4px] px-1 py-0.5 font-mono text-[12px]"
+            style={{ background: "rgba(255,255,255,0.08)" }}
+          >
+            {children}
+          </code>
+        ),
+        pre: ({ children }) => (
+          <pre
+            className="my-1.5 overflow-x-auto rounded-[6px] p-2 font-mono text-[12px] leading-[1.4]"
+            style={{ background: "rgba(0,0,0,0.3)" }}
+          >
+            {children}
+          </pre>
+        ),
+        // Wrapped in its own overflow-x-auto: at 900px the bubble already
+        // has real room (see the width redesign this replaces), but a table
+        // with many columns can still legitimately need more — this scrolls
+        // just the table, not the whole message bubble.
+        table: ({ children }) => (
+          <div className="my-1.5 overflow-x-auto rounded-[6px]" style={{ border: "0.5px solid rgba(255,255,255,0.1)" }}>
+            <table className="w-full border-collapse text-[12px]">{children}</table>
+          </div>
+        ),
+        thead: ({ children }) => (
+          <thead style={{ background: "rgba(255,255,255,0.05)" }}>{children}</thead>
+        ),
+        th: ({ children }) => (
+          <th
+            className="whitespace-nowrap px-2.5 py-1.5 text-left font-semibold italic"
+            style={{ color: PANEL_TITLE, borderBottom: "0.5px solid rgba(255,255,255,0.12)" }}
+          >
+            {children}
+          </th>
+        ),
+        td: ({ children }) => (
+          <td
+            className="whitespace-nowrap px-2.5 py-1.5"
+            style={{ color: BODY_TEXT, borderBottom: "0.5px solid rgba(255,255,255,0.06)" }}
+          >
+            {children}
+          </td>
+        ),
+      }}
+    >
+      {content}
+    </Markdown>
+  );
+}
 
 // Input auto-grow: starts roomy (not a cramped one-liner), grows silently
 // with the question, and only becomes internally scrollable once it's
@@ -162,12 +253,16 @@ export function AiChat() {
 
   return (
     <>
-      {/* Panel */}
+      {/* Panel — full-width bottom drawer, matching the dashboard's own
+          max-w-[1400px] frame rather than 100vw edge-to-edge. Tables in
+          responses now have real horizontal room; on ultra-wide monitors a
+          true 100vw chat would look stretched for something that's still
+          fundamentally a conversation, not a full page. */}
       {open && (
         <div
-          className="fixed bottom-24 right-6 z-[200] flex h-[560px] w-[380px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-[14px]"
+          className="fixed inset-x-0 bottom-0 z-[200] mx-auto flex h-[440px] w-full max-w-[1400px] flex-col overflow-hidden rounded-t-[14px]"
           style={{
-            background: "rgba(18, 18, 32, 0.85)",
+            background: "rgba(18, 18, 32, 0.65)",
             backdropFilter: "blur(24px)",
             WebkitBackdropFilter: "blur(24px)",
             border: "0.5px solid rgba(255, 255, 255, 0.12)",
@@ -255,16 +350,30 @@ export function AiChat() {
               </p>
             )}
 
-            {messages.map((m) => (
-              <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div
-                  className="max-w-[88%] rounded-[10px] px-3 py-2 text-[13px] leading-[1.45]"
-                  style={{
-                    background:
-                      m.role === "user"
-                        ? "rgba(160, 120, 240, 0.18)"
-                        : m.error
-                          ? "rgba(240, 100, 100, 0.1)"
+            {messages.map((m) => {
+              // The GFM table separator row (|---|---|, optionally with :
+              // for alignment) is what actually distinguishes "this message
+              // has a table" from "this message happens to contain a pipe
+              // character" — checking for "|" alone would misfire on plain
+              // text. Table messages stay capped narrower so columns don't
+              // stretch to absurd widths; everything else gets real room
+              // instead of sitting in a narrow column with empty space
+              // on either side of an otherwise-1400px-wide panel.
+              const hasTable = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/m.test(
+                m.content
+              );
+              return (
+                <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div
+                    className={`rounded-[10px] px-3 py-2 text-[13px] leading-[1.45] ${
+                      hasTable ? "max-w-[900px]" : "max-w-[85%]"
+                    }`}
+                    style={{
+                      background:
+                        m.role === "user"
+                          ? "rgba(160, 120, 240, 0.18)"
+                          : m.error
+                            ? "rgba(240, 100, 100, 0.1)"
                           : "rgba(255, 255, 255, 0.05)",
                     border:
                       m.role === "user"
@@ -273,11 +382,12 @@ export function AiChat() {
                     color: m.error ? "rgba(240, 160, 160, 0.9)" : BODY_TEXT,
                   }}
                 >
-                  <span className="whitespace-pre-wrap">{m.content}</span>
+                  <MessageContent content={m.content} />
                   {m.generatedSql && <SqlDisclosure items={m.generatedSql} />}
                 </div>
               </div>
-            ))}
+              );
+            })}
 
             {loading && (
               <div className="flex justify-start">
@@ -325,11 +435,17 @@ export function AiChat() {
         </div>
       )}
 
-      {/* Floating button */}
+      {/* Floating button. Position depends on `open`: bottom-right corner
+          when closed (unchanged), but perched just above the drawer's top
+          edge when open — the drawer is now h-[440px] flush to the bottom
+          of the viewport, so the button's old fixed bottom-6 spot would sit
+          INSIDE the open panel instead of above it. */}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="fixed bottom-6 right-6 z-[200] flex h-14 w-14 items-center justify-center rounded-full transition-transform hover:scale-105"
+        className={`fixed right-6 z-[210] flex h-14 w-14 items-center justify-center rounded-full transition-all hover:scale-105 ${
+          open ? "bottom-[456px]" : "bottom-6"
+        }`}
         style={{
           background: "rgba(120, 120, 155, 0.12)",
           backdropFilter: "blur(20px)",

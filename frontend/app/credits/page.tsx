@@ -5,8 +5,8 @@ import { Mail } from "lucide-react";
 import { AlmanacHeader } from "@/components/almanac-header";
 import { GlassPanel } from "@/components/glass-panel";
 
-const VERSION = "1.0";
-const RELEASE_DATE = "23.07.26";
+const VERSION = "1.1";
+const RELEASE_DATE = "01.08.26";
 
 const TEXT_PRIMARY = "rgba(232, 230, 240, 0.90)";
 const TEXT_SECONDARY = "rgba(199, 197, 208, 0.55)";
