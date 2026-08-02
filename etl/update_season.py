@@ -154,6 +154,47 @@ def ensure_constructor(cons_data, constructors_map):
     return new_id
 
 
+def ensure_status(status_text, statuses_map):
+    """Resolve a Jolpica status string to a statusId, adding it to the status
+    dictionary table if it's new.
+
+    This exists because Jolpica's status vocabulary drifted from the original
+    Ergast dump the status table was seeded with: e.g. every car a lap or more
+    down is now a single "Lapped" instead of the old per-lap "+1 Lap" / "+2
+    Laps" rows, and non-starters come back as "Did not start" rather than
+    "Withdrew". Those strings simply weren't in the table, and the previous
+    code did `statuses_map.get(status_text)` — which silently returns None on a
+    miss, writing a NULL statusId. An INNER JOIN to status then dropped those
+    result rows entirely, so whole finishing positions vanished from the app
+    with no error anywhere. Auto-adding (like ensure_driver/ensure_constructor
+    already do for new drivers/teams) means a never-before-seen status becomes
+    a real row instead of a silent NULL, and it's logged so it's visible.
+    """
+    if not status_text:
+        # Genuinely absent status in the feed — leave NULL rather than invent a
+        # bogus dictionary entry. Logged so it doesn't pass unnoticed.
+        log.warning("  Result has empty status text -> statusId left NULL")
+        return None
+
+    if status_text in statuses_map:
+        return statuses_map[status_text]
+
+    result = list(client.query(
+        f"SELECT MAX(statusId) AS max_id FROM `{PROJECT_ID}.{DATASET}.status`"
+    ).result())
+    new_id = (result[0].max_id or 0) + 1
+
+    row = {"statusId": new_id, "status": status_text}
+    df = pd.DataFrame([row])
+    client.load_table_from_dataframe(
+        df, f"{PROJECT_ID}.{DATASET}.status",
+        job_config=bigquery.LoadJobConfig(write_disposition=bigquery.WriteDisposition.WRITE_APPEND)
+    ).result()
+    statuses_map[status_text] = new_id
+    log.info(f"  New status: {status_text!r} -> ID {new_id}")
+    return new_id
+
+
 # ============ Fetch Current Season ============
 def fetch_results(drivers_map, constructors_map, races_map, statuses_map):
     """Fetch race results for current season."""
@@ -176,7 +217,7 @@ def fetch_results(drivers_map, constructors_map, races_map, statuses_map):
                 time_obj = res.get("Time", {})
                 fl = res.get("FastestLap", {})
                 status_text = res.get("status", "")
-                status_id = statuses_map.get(status_text)
+                status_id = ensure_status(status_text, statuses_map)
 
                 rows.append({
                     "resultId": result_id_start,
@@ -253,7 +294,7 @@ def fetch_sprint(drivers_map, constructors_map, races_map, statuses_map):
                     time_obj = s.get("Time", {})
                     fl = s.get("FastestLap", {})
                     status_text = s.get("status", "")
-                    status_id = statuses_map.get(status_text)
+                    status_id = ensure_status(status_text, statuses_map)
                     rows.append({
                         "resultId": result_id_start,
                         "raceId": race_id,
